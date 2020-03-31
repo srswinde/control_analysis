@@ -1,0 +1,475 @@
+<html>
+  <head>
+    <!-- TODO: There should be a way to include all of the required javascript
+               and CSS so matplotlib can add to the set in the future if it
+               needs to. -->
+    <link rel="stylesheet" href="_static/css/page.css" type="text/css">
+    <link rel="stylesheet" href="_static/css/boilerplate.css" type="text/css" />
+    <link rel="stylesheet" href="_static/css/fbm.css" type="text/css" />
+    <link rel="stylesheet" href="_static/jquery-ui-1.12.1/jquery-ui.min.css" >
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css" integrity="sha384-Vkoo8x4CGsO3+Hhxv8T/Q5PaXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh" crossorigin="anonymous"><script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js" integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1" crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM" crossorigin="anonymous"></script>
+    <script src="_static/jquery-ui-1.12.1/external/jquery/jquery.js"></script>
+    <script src="_static/jquery-ui-1.12.1/jquery-ui.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/js/bootstrap.min.js" integrity="sha384-wfSDF2E50Y2D1uUdj0O3uMBJnjuUD4Ih7YwaYd1iqfktj0Uod8GCExl3Og8ifwB6" crossorigin="anonymous"></script>
+
+    <script src="mpl.js"></script>
+
+    <script>
+      /* This is a callback that is called when the user saves
+         (downloads) a file.  Its purpose is really to map from a
+         figure and file format to a url in the application. */
+
+      {% for figkey, fig, _, fig_id in fc.iterall() %}
+      function ondownload_{{ figkey }}(figure, format) {
+        console.log(figure, format)
+        window.open('{{ figkey }}/download.' + format, '_blank');
+      }
+      {% end %}
+
+      $(document).ready(
+        function() {
+          cache = {};
+          $("input#in_num").keyup(function()
+          {
+            var num_array = $(this).val().split(" ")
+            numstr = build_tf(num_array);
+
+            var den_array = $("input#in_den").val().split(" ")
+
+            cache["num"] = num_array;
+            cache["den"] = den_array;
+            dostep();
+            /*
+            var order = values.length
+            outstr = ""
+            cache["num"] = []
+            try
+            {
+                for(idx in values)
+                {
+                    val = parseFloat(values[idx])
+
+                    if(! isNaN(val) )
+                    {
+                        val1 = (val == 1) ? "" : val;
+                        exponent = order-idx-1
+                        cache["num"][idx] = val
+                        if(val == 0)
+                            continue;
+                        switch(exponent)
+                        {
+                            case 1:
+                                outstr = outstr + " " + val1 + "s" + " + ";
+                            break
+                            case 0:
+                                outstr = outstr + val;
+                            break;
+                            default:
+                                outstr = outstr + " "+val1+"s<sup>"+exponent + " </sup>+ ";
+                            console.log(outstr)
+                        }
+
+                    }
+                }
+                $("#numerator").html(outstr);
+                dostep();
+            }
+            catch(err)
+            {
+                console.log(err);
+            }*/
+
+          });
+          $("input#in_den").keyup(function()
+          {
+            var num_array = $("input#in_num").val().split(" ")
+            var den_array = $("input#in_den").val().split(" ")
+
+            cache["num"] = num_array;
+            cache["den"] = den_array;
+            dostep();
+            /*
+            var values = $(this).val().split(" ")
+            var order = values.length
+            outstr = ""
+            cache["den"] = []
+            try
+            {
+                for(idx in values)
+                {
+                    val = parseFloat(values[idx])
+
+                    if(! isNaN(val) )
+                    {
+                        val1 = (val == 1) ? "" : val;
+                        exponent = order-idx-1
+                        cache["den"][idx] = val
+                        if(val == 0)
+                            continue;
+                        switch(exponent)
+                        {
+                            case 1:
+                                outstr = outstr + " " + val1 + "s" + " + ";
+                            break
+                            case 0:
+                                outstr = outstr + val;
+                            break;
+                            default:
+                                outstr = outstr + " "+val1+"s<sup>"+exponent + " </sup>+ ";
+                        }
+
+                    }
+                }
+                $("#denominator").html(outstr);
+                dostep();
+            }
+            catch(err)
+            {
+                console.log(err);
+            }
+            */
+          });
+          $("input#step_amp").keyup(function(evt)
+          {
+            if(evt.which == 13)
+            {
+                console.log("Requesting step ")
+
+                $.ajax({
+                    type:"post",
+                    url:"step",
+                    contentType: 'application/json; charset=utf-8',
+                    dataType: "json",
+                    data: JSON.stringify({num:cache["num"], den:cache["den"]})
+                })
+            }
+          });
+
+          var websocket_type = mpl.get_websocket_type();
+          {% for key, fig, _, fig_id in fc.iterall() %}
+          /* It is up to the application to provide a websocket that the figure
+             will use to communicate to the server.  This websocket object can
+             also be a "fake" websocket that underneath multiplexes messages
+             from multiple figures, if necessary. */
+
+          var websocket_{{ key }} = new websocket_type("ws://{{ host }}/{{ key }}/ws");
+
+          // mpl.figure creates a new figure on the webpage.
+          var fig = new mpl.figure(
+              // A unique numeric identifier for the figure
+              {{ fig_id }},
+              // A websocket object (or something that behaves like one)
+              websocket_{{ key }},
+              // A function called when a file type is selected for download
+              ondownload_{{ key }},
+              // The HTML element in which to place the figure
+              $('div#{{ key }}'));
+         {% end %}
+         $("input#2gain").keypress(function (evt){
+         console.log("2gain")
+         if(evt.which == 13)
+         {
+            new_evt = $.Event("click");
+            $("a#do_order2").trigger(new_evt);
+         }
+         });
+
+         $("input#2zeta").keypress(function (evt){
+             if(evt.which == 13)
+             {
+                new_evt = $.Event("click");
+                $("a#do_order2").trigger(new_evt);
+             }
+         })
+
+         $("input#2w_n").keypress(function (evt){
+             if(evt.which == 13)
+             {
+                new_evt = $.Event("click");
+                $("a#do_order2").trigger(new_evt);
+             }
+         })
+        }
+
+      );
+
+    function dostep()
+    {
+         $.ajax({
+            type:"post",
+            url:"step",
+            contentType: 'application/json; charset=utf-8',
+            dataType: "json",
+            data: JSON.stringify({num:cache["num"], den:cache["den"]})
+          });
+
+          $("#numerator").html(build_tf(cache["num"]));
+          $("#denominator").html(build_tf(cache["den"]));
+          $("img#in").attr("src", "fig1/download.png?t="+Math.random())
+          $("img#out").attr("src", "fig2/download.png?t="+Math.random())
+    }
+
+    function init_plots(evt)
+    {
+        var e = $.Event("keyup");
+        e.which = 50;
+        $("#in_num").val("1")
+        $("#in_den").val("1 1 1")
+        $("#in_num").trigger(e)
+        $("#in_den").trigger(e)
+
+        //setTimeout(function() {$.ajax("init")}, 1000);
+    }
+    function order2(evt)
+    {
+        console.log("order2")
+        gain = $("input#2gain").val();
+        zeta = $("input#2zeta").val();
+        w_n = $("input#2w_n").val();
+
+        gain = isNaN(gain) ? 5 : parseFloat(gain);
+        zeta = isNaN(zeta) ?  0.1 : parseFloat(zeta);
+        w_n = isNaN(w_n) ? 1 : parseFloat(w_n);
+
+
+        $("input#in_num").val(gain)
+        var den = 1 + " " + zeta*w_n + " " +w_n*w_n;
+        $("input#in_den").val(den)
+
+        cache["num"] = [gain]
+        cache["den"] = [1, zeta*w_n, w_n*w_n]
+        dostep();
+    }
+
+    function build_tf(values)
+    {
+        outstr = ""
+        order = values.length
+        try
+        {
+            for(idx in values)
+            {
+                val = parseFloat(values[idx])
+
+                if(! isNaN(val) )
+                {
+                    val1 = (val == 1) ? "" : val;
+                    exponent = order-idx-1
+                    if(val == 0)
+                        continue;
+                    switch(exponent)
+                    {
+                        case 1:
+                            outstr = outstr + " " + val1 + "s" + " + ";
+                        break
+                        case 0:
+                            outstr = outstr + val;
+                        break;
+                        default:
+                            outstr = outstr + " "+val1+"s<sup>"+exponent + " </sup>+ ";
+                        console.log(outstr)
+                    }
+
+                }
+            }
+        }
+        catch(err)
+        {
+            console.log(err)
+        }
+        return outstr
+    }
+
+    </script>
+    <style>
+        div.figclass
+        {
+            padding:10px;
+        }
+
+        span#fig1_control
+        {
+            min-width:20px;
+            color:white;
+        }
+        td.controls
+        {
+            min-width:200px;
+            background-color:red;
+        }
+        .row
+        {
+            border:1px solid white;
+        }
+    </style>
+    <title>Tektronix</title>
+  </head>
+
+  <body style="background:wheat" onload="init_plots()">
+  <div  class="row">
+      <div class="col-md-6" id="left">
+        <div class="accordion" id="accordionExample">
+          <div class="card">
+            <div class="card-header" id="headingOne">
+              <h2 class="mb-0">
+                <button class="btn btn-link" type="button" data-toggle="collapse" data-target="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
+                    Use a predefined Transfer function.
+                </button>
+              </h2>
+            </div>
+
+            <div id="collapseOne" class="collapse show" aria-labelledby="headingOne" data-parent="#accordionExample">
+              <div class="card-body">
+                  <h4>Define the Transfer function</h4>
+                  <div class="row" style="padding:20px;">
+                      <div class="col-sm-6">
+                        <div class="dropdown">
+                            <button class="btn btn-secondary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                Transfer Functions
+                            </button>
+                            <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
+                                <a title="Click Here" id="do_order2" class="dropdown-item" href="#" onclick="order2()">2nd order with gain
+                                </a><br>
+                                    <div title="System Gain">
+                                    K = <input type="text" size="5" id="2gain" value="10"/>
+                                    </div>
+                                    <div title="Damping Ratio">
+                                    &zeta; = <input type="text" size="5" id="2zeta" value="1" />
+                                    </div>
+                                    <div title="Resonance">
+                                    W<sub>n</sub> = <input type="text" size="5" id="2w_n" value="1"/>
+                                    </div>
+                                <hr/>
+                                More to come
+                                <!--<a class="dropdown-item" href="#">Another action</a>
+                                <a class="dropdown-item" href="#">Something else here</a>-->
+                            </div>
+                        </div>
+                      </div>
+                      <div class="col-sm-6" style="text-align:center">
+                          Numerator = <input id="in_num" type="text" value="1" size="5"/>
+                          <hr style="border:2px solid  black"></hr>
+                          Denominator = <input id="in_den" type="text" value="1 2 2" size="5"/>
+                      </div>
+
+                  </div>
+                  <div class="container-fluid" style="padding:20px">
+                      <hr style="border 1px solid black"></hr>
+                      <div class="row" style="padding:20px 0px 50px 0px">
+                          <h4 class="col-sm-4">Define the Input</h4>
+
+                          <div class="col-sm-8">
+                              <div class="dropdown">
+                                <button class="btn btn-secondary dropdown-toggle" type="button" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                    Input Type
+                                </button>
+                                <div class="dropdown-menu" aria-labelledby="dropdownMenuButton">
+                                    <a class="dropdown-item" href="#" >Step (More to come)
+                                    </a>
+                                    <!--<a class="dropdown-item" href="#">Another action</a>
+                                    <a class="dropdown-item" href="#">Something else here</a>-->
+                                </div>
+                              </div>
+                          </div>
+                      </div>
+                      <div class="row">
+                              <div class="col-sm-5" style="padding-top:20px">
+                                  <p style="text-align:center; display:block">INPUT</p>
+                                  <img id="in" src="fig1/download.png" height="75px" width="200px"><img>---->
+                              </div>
+                              <div class="col-sm-2" style="border:1px solid black; padding-top:20px">
+                                  <div id="numerator" style="text-align:center"></div>
+                                  <hr style="border:2px solid  black"></hr>
+                                  <div id="denominator" style="text-align:center"></div>
+                              </div>
+                              <div class="col-sm-5" style="padding-top:20px">
+                                  <p style="text-align:center">OUTPUT</p>
+                                  ---->
+                                  <img id="out" src="fig2/download.png" height="75px" width="200px"><img>
+                                  <a href="http://127.0.0.1:8080/fig2/download.csv">Download output as CSV</a>
+                              </div>
+                          </div>
+                  </div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header" id="headingTwo">
+              <h2 class="mb-0">
+                <button class="btn btn-link collapsed" type="button" data-toggle="collapse" data-target="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
+                    Read I/O from Tektronix Oscilloscope
+                </button>
+              </h2>
+            </div>
+            <div id="collapseTwo" class="collapse" aria-labelledby="headingTwo" data-parent="#accordionExample">
+              <div class="card-body">
+                  As soon as the COVID 19 crisis is over, I will implement this side.
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="col-md-6" id="right">
+          <div class="row">
+              <div class="col-sm-3">
+                  <a href="http://127.0.0.1:8080/fig1/download.csv"><h1>Download input as CSV</h1>></a>
+              </div>
+              <div class="col-sm-9 figclass" id="fig1" style=""></div>
+          </div>
+          <div class="row">
+              <div class="col-sm-3">
+                  <a href="http://127.0.0.1:8080/fig2/download.csv"><h1>Download output as CSV</h1></a>
+              </div>
+              <div class="col-sm-9 figclass" id="fig2" style=""></div>
+          </div>
+
+          <div class="row">
+              <div class="col-sm-3"></div>
+              <div class="col-sm-9 figclass" id="fig3" style=""></div>
+          </div>
+
+          <div class="row">
+              <div class="col-sm-3"></div>
+              <div class="col-sm-9 figclass" id="fig4" style=""></div>
+          </div>
+      </div>
+  </div>
+  <!--
+    <table id="figures" style="position:fixed">
+        <tbody>
+        <tr>
+            <td id="fig1_controls" class="controls">
+
+            </td>
+            <td>
+                <div class="figclass" id="fig1" style=""></div>
+            </td>
+        </tr>
+        <tr>
+            <td id="fig2_controls" class="controls">
+            </td>
+            <td>
+                <div class="figclass" id="fig2" style=""></div>
+            </td>
+        </tr>
+        <tr>
+            <td id="fig3_controls" class="controls">
+            </td>
+            <td>
+                <div class="figclass" id="fig3" style=""></div>
+            </td>
+        </tr>
+        <tr>
+            <td id="fig4_controls" class="controls">
+            </td>
+            <td>
+                <div class="figclass" id="fig4" style=""></div>
+            </td>
+        </tr>
+        </tbody>
+    </table>
+  -->
+  </body>
+</html>
