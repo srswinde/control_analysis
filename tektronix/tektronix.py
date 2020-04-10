@@ -4,7 +4,7 @@ from collections import namedtuple
 import pandas as pd
 from io import StringIO
 from enum import Enum, auto
-from scipy import fftpack, stats, signal
+from scipy import fftpack, stats, signal, special
 from scipy.optimize import curve_fit, least_squares
 import matplotlib.pyplot as plt
 import numpy as np
@@ -184,6 +184,25 @@ class waveform:
         self.data_str = data_str
         self.preamble = preamble
 
+    @property
+    def x(self):
+        x = self.series.index.to_numpy()
+        if len(x.shape) != 1:
+            x = x.reshape((len(x), ))
+        if len(x.shape) != 1:
+            raise ValueError(f"Can't convert to 1d numpy array x.shape = {x.shape}")
+
+        return x
+
+    @property
+    def y(self):
+        y = self.series.to_numpy()
+        if len(y.shape) != 1:
+            y = y.reshape((len(y), ))
+        if len(y.shape) != 1:
+            raise ValueError(f"Can't convert to 1d numpy array y.shape = {y.shape}")
+
+        return y
     def clean_step(self, sigma=3.0, window=None):
         """Replace datapoints with std>sigma over a window
         with the mean in that window. This operation is not
@@ -258,13 +277,99 @@ class waveform:
             fd.write(data.read())
 
     def frequency(self, sigma=0):
-        X = fftpack.fft(self.series.to_numpy().T[0])
+        arr = self.x
+        if self.index_type != "float":
+            self.set_index("float")
+        if len(arr.shape) != 1:
+            arr = arr.T[0]
+        X = fftpack.fft(arr)
         f_s = len(self.series) / (self.series.index[-1] - self.series.index[0])
         freqs = fftpack.fftfreq(len(X)) * f_s
         f = pd.Series(np.abs(X), index=freqs)
         f = f[f.index > 0]
         f = f[f > f.std() * sigma]
         return f
+
+    def sigmoid_fit(self):
+        sigmoid = lambda x, x0, y0, rise, amp : y0+amp*special.expit(rise*(x-x0))
+        x, y = self.x, self.y
+        xi = np.mean(x)
+        y1 = np.mean(y)
+        ampi = 1.0
+        risei = 1.0
+
+        resp, cov = curve_fit(sigmoid, x, y, p0=[xi, yi, ampi, risei])
+
+    def sigmoid_normalize(self, inplace=False):
+        """Fit the waveform a sigmoid(logistical) function
+
+        """
+        sigmoid = lambda x, x0, y0, rise, amp: y0 + amp * special.expit(rise * (x - x0))
+        x, y = self.x, self.y
+        xi = np.mean(x)
+        yi = np.mean(y)
+        ampi = 1.0
+        risei = 1.0
+        (x0, y0, rise, amp), cov = curve_fit(sigmoid, x, y, p0=[xi, yi, ampi, risei])
+        nfit = sigmoid(x, x0, 0, rise, 1)
+
+        idx = np.argmax(nfit > 0.01)
+        t0 = self.series.index[idx]
+
+        output = pd.Series((self.series - y0) / amp)
+
+
+
+        output.index -= t0
+        if inplace:
+            self.series = output[0:]
+        else:
+            return output[0:], (x0, y0, rise, amp), nfit[idx:]
+
+
+
+
+    def analyze(self, peak_width=0.01):
+        x, y = self.x, self.y
+        an = namedtuple("analysis", "peaks peak_time final_value rise_time rise_time_rate overshoot t_10 t_90")
+        peaks, props = signal.find_peaks(y, width=peak_width*len(y))
+        final_value = self.series.iloc[int(-peak_width*len(x)):].mean()
+        if len(peaks) < 1:
+            peak_time = None
+            overshoot = None
+        else:
+            peak_time = self.series.index[peaks[0]]
+            overshoot = self.series[peak_time] - final_value
+        print(final_value)
+        t_10 = self.series[self.series > 0.1*final_value].index[0]
+        t_90 = self.series[self.series > 0.9*final_value].index[0]
+
+        rise_time = t_90-t_10
+        rise_time_rate = (self.series[t_90]-self.series[t_10])/rise_time
+
+        return an(peaks, peak_time, final_value, rise_time, rise_time_rate, overshoot, t_10, t_90)
+
+
+    def plot_analysis(self, ax=None, an=None):
+        x, y = self.x, self.y
+        if ax is None:
+            ax = plt.gca()
+        if an is None:
+            an = self.analyze()
+
+        ax.plot(x, y, label="Wave Form")
+        ax.plot(x[an.peaks], y[an.peaks], "y+", label="Peaks")
+        ax.plot(x, [an.final_value]*len(x), "r--", label="Final")
+        y_10 = self.series[an.t_10]
+        y_90 = self.series[an.t_90]
+        ax.plot([an.t_10, an.t_90], [y_10, y_90], "g--", label="Rise")
+        ax.legend()
+        ax.grid()
+
+        return ax
+
+
+
 
 
 def fake(tf: signal.TransferFunction=None, noise: float= 0.00, resolution: float= 0.005, t=None):
@@ -301,11 +406,13 @@ def order2(zeta, w_n, k=1):
 
 def load(fname):
     class loadedwf(waveform):
-        def __init__(self, data):
+        def __init__(self, data, fname):
             self.series = data
             self.series.index = pd.to_timedelta(self.series.index, unit="seconds")
-    path = Path(__file__).parent.parent/"waveforms"/fname
-    with  path.open() as fd:
+            self.fname = fname
+    path = Path(__file__).parent/"waveforms"/fname
+
+    with path.open() as fd:
 
         meta = []
         data = StringIO()
@@ -332,7 +439,22 @@ def load(fname):
                 part = filepart.data
     data.seek(0)
     series = pd.read_csv(data, index_col="Time [s]")
-    return loadedwf(series), meta
+
+    return loadedwf(series, fname), meta
+
+def load_all():
+    path = Path(__file__).parent/"waveforms"
+
+    wfs = []
+    for fname in path.iterdir():
+        try:
+            wfs.append(load(fname))
+        except Exception as err:
+            print(f"Error loading {fname}: {err}")
+
+    return wfs
+
+
 
 
 class sine_fitter:

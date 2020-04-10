@@ -1,5 +1,12 @@
 import io
-
+import json
+import asyncio
+from scipy import signal
+import pandas as pd
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+import numpy as np
+from collections import OrderedDict, namedtuple
 try:
     import tornado
 except ImportError:
@@ -16,14 +23,9 @@ matplotlib.use('webagg')
 from matplotlib.backends.backend_webagg_core import (
     FigureManagerWebAgg, new_figure_manager_given_figure,
     FigureCanvasWebAggCore)
-from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
-import numpy as np
-from collections import OrderedDict, namedtuple
-import json
-import asyncio
-from scipy import signal
-import pandas as pd
+
+
+
 
 class FigureContainer:
     """Contains the figure and their respective managers

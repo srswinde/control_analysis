@@ -50,4 +50,5 @@ setup(
     url='https://github.com/srswinde/tektronix',
     version='0.1.0',
     zip_safe=False,
+    package_data={"tektronix": ["waveforms/*csv"]}
 )
