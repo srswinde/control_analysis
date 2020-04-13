@@ -152,8 +152,9 @@
              will use to communicate to the server.  This websocket object can
              also be a "fake" websocket that underneath multiplexes messages
              from multiple figures, if necessary. */
-
-          var websocket_{{ key }} = new websocket_type("ws://{{ host }}/{{ key }}/ws");
+					// {{ key }}
+					// {{ ws_uri }}
+					var websocket_{{ key }} = new websocket_type("{{ ws_uri }}/{{ key }}/ws");
 
           // mpl.figure creates a new figure on the webpage.
           var fig = new mpl.figure(

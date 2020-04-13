@@ -158,10 +158,11 @@ class MyApplication(tornado.web.Application):
             loop = tornado.ioloop.IOLoop.instance()
             # loop.add_callback(self.application.test)
             host = self.request.host
-            ws_uri = f"ws://{host}/fig1/"
+            ws_uri = f"ws://{host}/apps/tektronix"
             content = html_content % {
                 "ws_uri": ws_uri, "fig_id": id(figure)}
-            self.render("index.html", ws_uri=ws_uri, fc=fc, host=host)
+            self.render("index.html", ws_uri=ws_uri, fc=fc, host=host,
+            rproxy="apps/tektronix")
 
     class dosomething(tornado.web.RequestHandler):
 
