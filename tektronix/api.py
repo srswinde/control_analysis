@@ -416,13 +416,18 @@ class MyApplication(tornado.web.Application):
                 wf = tek.loadedwf(pd.Series(data), meta)
                 errmsg = ""
             except Exception as error:
-                fc = None
+                print(error)
+                #fc = None
                 errmsg = str(error)
             #x = wf.x
             ##y = wf.y
             #print(len(x), len(y))
-            #fc.plot('fig1', x, y)
-            #fc.get_manager('fig2').set_window_title("HEY!!")
+            ax=fc.plot('fig1', data[data.columns[0]], data[data.columns[1]])
+            ax.grid()
+            ax.set_title("Interactive Plot")
+            ax.set_xlabel("Time (ms)")
+            ax.set_ylabel("Volts")
+            #fc.get_manager('fig2')
 
             self.render(config['WEB']['template_path'] + '/wf.html',
                         wfdir=wfname,
