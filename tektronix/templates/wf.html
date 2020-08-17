@@ -1,0 +1,140 @@
+
+<!doctype html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+	<meta name="description" content="" />
+	<meta name="author" content="" />
+
+	<title> Tektronix</title>
+
+    <link rel="stylesheet" href="/_static/css/page.css" type="text/css">
+    <link rel="stylesheet" href="/_static/css/boilerplate.css" type="text/css" />
+    <link rel="stylesheet" href="/_static/css/fbm.css" type="text/css" />
+    <link rel="stylesheet" href="/_static/jquery-ui-1.12.1/jquery-ui.min.css" >
+
+    <script src="/_static/jquery-ui-1.12.1/external/jquery/jquery.js"></script>
+    <script src="/_static/jquery-ui-1.12.1/jquery-ui.min.js"></script>
+
+    <script src="/mpl.js"></script>
+
+	<!-- Font Awesome icons (free version)-->
+	<script src="https://use.fontawesome.com/releases/v5.13.0/js/all.js" crossorigin="anonymous"></script>
+
+	<!-- Google fonts-->
+	<link href="https://fonts.googleapis.com/css?family=Varela+Round" rel="stylesheet" />
+	<link href="https://fonts.googleapis.com/css?family=Nunito:200,200i,300,300i,400,400i,600,600i,700,700i,800,800i,900,900i" rel="stylesheet" />
+
+	<link href="https://code.jquery.com/ui/1.12.1/themes/smoothness/jquery-ui.css" rel="stylesheet"/>
+
+	<!-- Core theme CSS (includes Bootstrap)-->
+	<link href="/s/css/styles.css" rel="stylesheet" />
+
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js" integrity="sha256-VazP97ZCwtekAsvgPBSUwPFKdrwD3unUfSGVYrahUqU=" crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.bundle.min.js"></script>
+
+
+	<style>
+		.int
+		{
+			//padding:10px;
+			font-size:4px;
+		}
+	</style>
+    <script>
+    {% if fc %}
+        {% for figkey, fig, _, fig_id in fc.iterall() %}
+        function ondownload_{{ figkey }}(figure, format) {
+            console.log(figure, format)
+            window.open('{{ figkey }}/download.' + format, '_blank');
+        }
+        {% end %}
+
+
+        $(document).ready(function(){
+
+          var websocket_type = mpl.get_websocket_type();
+          {% for key, fig, _, fig_id in fc.iterall() %}
+          /* It is up to the application to provide a websocket that the figure
+             will use to communicate to the server.  This websocket object can
+             also be a "fake" websocket that underneath multiplexes messages
+             from multiple figures, if necessary. */
+					// {{ key }}
+					// {{ ws_uri }}
+					var websocket_{{ key }} = new websocket_type("{{ ws_uri }}/{{ key }}/ws");
+
+          // mpl.figure creates a new figure on the webpage.
+          var fig = new mpl.figure(
+              // A unique numeric identifier for the figure
+              {{ fig_id }},
+              // A websocket object (or something that behaves like one)
+              websocket_{{ key }},
+              // A function called when a file type is selected for download
+              ondownload_{{ key }},
+              // The HTML element in which to place the figure
+              $('div#{{ key }}'));
+         {% end %}
+         $("input#2gain").keypress(function (evt){
+         console.log("2gain")
+         if(evt.which == 13)
+         {
+            new_evt = $.Event("click");
+            $("a#do_order2").trigger(new_evt);
+         }
+         });
+        });
+        {% end %}
+    </script>
+
+</head>
+<body style="background:black;color:white">
+{% include navbar.html%}
+
+<h2 style="margin-bottom:20px">{{ wfdir[5:] }} </h2>
+<div class="row">
+<div class="col-1"></div>
+</div>
+
+<div class="row">
+<div class="col-2">
+<h5><a href="/wf/{{ wfdir }}/data.csv">
+<img src="https://img.icons8.com/officel/16/000000/download.png"/>
+Download as CSV File
+</a></h5>
+<h5>
+<h5><a href="/wavefrom/{{ wfdir }}/processed.xlsx">
+<img height="30px" width="30px" src="/s/img/excel-icon.png?v=c3e33641a610c68a4fb340686c6543b2"/>
+Download as excel File
+</a></h5>
+<h5>
+<img height="30px" width="30px" src="/s/img/jupyter.ico?v=7cd039809ffdcc89c54799536d84c372"/>
+<a href="/build-notebook?jobid=a8188322-ccef-11ea-aee6-0242ac1e0002"> Open In Jupyter notebook </a></h5>
+<h5 style="padding-top:50px"><a href="/wf/{{ wfdir }}/meta.json">Meta Info</a></h5>
+
+<a href="/tmp/a8188322-ccef-11ea-aee6-0242ac1e0002//tmp/a8188322-ccef-11ea-aee6-0242ac1e0002/roof_temp_bas20_probe1_07231420.csv" style="display:none;">
+/tmp/a8188322-ccef-11ea-aee6-0242ac1e0002/roof_temp_bas20_probe1_07231420.csv
+</a>
+
+</div>
+<div class="col-4">
+
+    <img src="/wf/{{ wfdir }}/image.png"/>
+</div>
+    {% if fc %}
+<div class="col-4">
+     <div class="col-sm-9 figclass" id="fig1" style=""></div>
+</div>
+    {% else %}
+    <p style="color:red; padding:30px;">There was an error plotting the waveform <BR/> {{ error }} </p>
+    {% end %}
+
+</div>
+
+
+
+
+
+</body>
+</html>

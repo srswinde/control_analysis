@@ -25,9 +25,9 @@ import tornado.httpserver
 import tornado.websocket
 import tornado.gen
 import tektronix.tektronix as tek
-from tektronix.appconfig import AppConfig; config = AppConfig("../config.ini")
+from .appconfig import AppConfig; config = AppConfig()
 import matplotlib
-
+from uuid import uuid4
 
 
 matplotlib.use('webagg')
@@ -37,9 +37,6 @@ from matplotlib.backends.backend_webagg_core import (
 
 
 
-
-class WaveformManager:
-    pass
 
 
 
@@ -161,11 +158,52 @@ phi = 0
 
 
 class MyApplication(tornado.web.Application):
-    class MainPage(tornado.web.RequestHandler):
 
+    class MainPage(tornado.web.RequestHandler):
+        tekcomm = tek.comm_singleton()
         """
         Serves the main HTML page.
         """
+        def get(self):
+            session_cookie = self.get_secure_cookie('session')
+            tek_ip = self.get_argument("tek_ip", None)
+
+            if session_cookie:
+                session_cookie = session_cookie.decode()
+                if str(self.tekcomm.session_id) == session_cookie:
+                    self.render((config['WEB']['template_path']+"/running.html"), tekcomm=self.tekcomm)
+
+                else:
+                    self.render((config['WEB']['template_path'] + "/error.html"),
+                                error=f"session cookie mismatch {session_cookie} is not {self.tekcomm.session_id}",
+                                msg="This means someone else is connected or there is a bug."
+                                )
+
+            else:
+                if self.tekcomm.session_id is None:
+                    if tek_ip is not None:
+                        try:
+                            self.tekcomm.start(tek_ip, {'client_ip': self.request.remote_ip})
+                            self.set_secure_cookie("session", str(self.tekcomm.session_id))
+                            self.render((config['WEB']['template_path'] + "/running.html"), tekcomm=self.tekcomm)
+                        except Exception as Error:
+                            self.render((config['WEB']['template_path'] + "/connect.html"),
+                                        tekcomm=None,
+                                        error=f"Could not connect to {tek_ip}<br>{Error}",
+                                        msg="This is likely caused by wrong IP or other network issues"
+                                        )
+                    else:
+                        self.render((config['WEB']['template_path'] + "/connect.html"),
+                                    tekcomm=None,
+                                    error="",
+                                    msg=""
+                                    )
+                else:
+                    self.write(self.tekcomm.state())
+
+
+
+    class TxFunction(tornado.web.RequestHandler):
 
         def get(self):
             fc = self.application.fig_container
@@ -178,7 +216,7 @@ class MyApplication(tornado.web.Application):
             ws_uri = f"ws://{host}"
             content = html_content % {
                 "ws_uri": ws_uri, "fig_id": id(figure)}
-            self.render("connect.html", ws_uri=ws_uri, fc=fc, host=host,
+            self.render(config['WEB']['template_path']+"/txfxn.html", ws_uri=ws_uri, fc=fc, host=host,
             rproxy="apps/tektronix")
 
     class dosomething(tornado.web.RequestHandler):
@@ -360,18 +398,70 @@ class MyApplication(tornado.web.Application):
                     blob.encode('base64').replace('\n', ''))
                 self.write_message(data_uri)
 
+
+    class Waveform(tornado.web.RequestHandler):
+
+        def get(self, wfname):
+
+
+            fc = self.application.fig_container
+            figure = self.application.fig_container['fig1']
+            host = self.request.host
+            ws_uri = f"ws://{host}"
+            path = Path(config["DEFAULT"]["waveform_path"])/wfname
+            data = pd.read_csv(path/"data.csv")
+            meta = json.load(open(path/"meta.json"))
+
+            try:
+                wf = tek.loadedwf(pd.Series(data), meta)
+                errmsg = ""
+            except Exception as error:
+                fc = None
+                errmsg = str(error)
+            #x = wf.x
+            ##y = wf.y
+            #print(len(x), len(y))
+            #fc.plot('fig1', x, y)
+            #fc.get_manager('fig2').set_window_title("HEY!!")
+
+            self.render(config['WEB']['template_path'] + '/wf.html',
+                        wfdir=wfname,
+                        fc=fc,
+                        ws_uri=ws_uri,
+                        host=host,
+                        error=errmsg)
+
+
+
+    class ListWaveforms(tornado.web.RequestHandler):
+
+        def get( self ):
+
+            wfpath = Path(config["DEFAULT"]["waveform_path"])
+            wfpath.mkdir(parents=True, exist_ok=True)
+            names = [ path.name for path in wfpath.iterdir() ]
+
+            self.render(config['WEB']['template_path']+"/waveforms.html", waveforms=names)
+
+
+    class WaitForWaveform(tornado.web.RequestHandler):
+        def get(self):
+
+            self.render(config['WEB']['template_path']+"/saveandwait.html")
+
     # Begin tektronix api
 
     class converse(tornado.web.RequestHandler):
         tekcomm = tek.comm_singleton()
         def post( self ):
-            arg = self.get_argument( "msg" )
+            arg = self.get_argument("msg")
 
             # We should probably do some error checking
 
             self.tekcomm.converse(arg)
 
     class start(tornado.web.RequestHandler):
+
         tekcomm = tek.comm_singleton()
         def post( self ):
             ipaddr = self.get_argument( "ipaddr" )
@@ -379,7 +469,8 @@ class MyApplication(tornado.web.Application):
 
             # We should probably do some error checking
             #
-            self.tekcomm.start(ipaddr, port)
+            self.tekcomm.start(ipaddr, {'client_ip': self.request.remote_ip}, port)
+            self.set_secure_cookie("session", self.tekcomm.session_id)
             self.write(self.tekcomm.state())
 
 
@@ -388,6 +479,51 @@ class MyApplication(tornado.web.Application):
 
         def get(self):
             self.write(self.tekcomm.state())
+
+    class save(tornado.web.RequestHandler):
+
+        tekcomm = tek.comm_singleton()
+
+
+        async def get(self):
+
+            try:
+                is_finished = self.tekcomm.current_job_finished()
+            except Exception as error:
+                self.tekcomm.clear_error()
+
+                await self.render(config['WEB']['template_path'] + "/saveandwait.html",
+                                  name=name,
+                                  status="Error",
+                                  error=str(error))
+
+            if is_finished:
+
+                self.redirect(f"/waveform/{is_finished}")
+
+            elif is_finished is None:
+                channel = self.get_argument("channel")
+                name = self.get_argument("name")
+                unique = str(uuid4())[:4]
+
+                self.current_job = asyncio.create_task(self.tekcomm.get_and_save(name, channel, unique))
+
+                await self.render(config['WEB']['template_path'] + "/saveandwait.html",
+                            name=name,
+                            status="Working",
+                            error="")
+                #self.write({"status": "started", "wfname": f"{unique}_{name}"})
+
+            else:
+                name = self.get_argument("name")
+                await self.render(config['WEB']['template_path'] + "/saveandwait.html",
+                                  name=name,
+                                  status="Working",
+                                  error="")
+
+
+
+
 
     async def test(self):
         fc = self.fig_container
@@ -412,6 +548,9 @@ class MyApplication(tornado.web.Application):
         # self.manager = figure._managers[1]
         # self.manager = new_figure_manager_given_figure(id(figure), figure)
 
+        print(str(Path(config['WEB']['favicon_path'])))
+        print(Path(config['WEB']['favicon_path']).exists())
+
         super().__init__([
             # MPL Static files for the CSS and JS
             (r'/_static/(.*)',
@@ -419,12 +558,32 @@ class MyApplication(tornado.web.Application):
              {'path': FigureManagerWebAgg.get_static_file_path()}),
 
             # My static files
-            (r'/static/(.*)',
+            (r'/s/(.*)',
              tornado.web.StaticFileHandler,
-             {'path': ''}),
+             {'path': str(Path(config['WEB']['static_path']))}),
+
+
+            # Waveforms static path
+            (r'/wf/(.*)',
+             tornado.web.StaticFileHandler,
+             {'path': str(Path(config['WEB']['waveform_path']))}
+             ),
+
+            # favicon
+            (r'/(favicon.ico)',
+             tornado.web.StaticFileHandler,
+             {'path': str(Path(config['WEB']['favicon_path']))}),
+
 
             # The page that contains all of the pieces
             ('/', self.MainPage),
+            #('/', self.TxFunction),
+
+            ('/waveforms.html', self.ListWaveforms),
+
+            (r'/waveform/(.*)', self.Waveform),
+
+            (r'/saveandwait', self.WaitForWaveform),
 
             ('/mpl.js', self.MplJs),
 
@@ -441,37 +600,12 @@ class MyApplication(tornado.web.Application):
             (r'/init', self.init_plots),
             (r'/tek/start', self.start),
             (r'/tek/state', self.state),
-            (r'/tek/converse', self.converse)
+            (r'/tek/converse', self.converse),
+            (r'/tek/save', self.save)
 
-        ], debug=True)
 
 
-# if __name__ == "__main__":
-def main():
-    figs = FigureContainer()
-    figs.add_figure("fig1", figsize=(6, 3.0))
-    figs.add_figure("fig2", figsize=(6, 3.0))
-    # figs.add_figure("fig3", figsize=(6, 1.8))
-    # figs.add_figure("fig4", figsize=(6, 1.8))
+        ], debug=True,
 
-    x = np.linspace(0, np.pi * 8, 10000)
-    y = np.sin(x)
+            cookie_secret=str(uuid4()))
 
-    #figs.plot('fig2', x, y + 10, )
-    # figs.plot('fig3', x, np.exp(x))
-    # figs.plot('fig4', x, -np.exp(x))
-
-    # figure = create_figures()[0]
-    application = MyApplication(figs)
-
-    http_server = tornado.httpserver.HTTPServer(application)
-    http_server.listen(8080)
-
-    print("http://127.0.0.1:8080/")
-    print("Press Ctrl+C to quit")
-
-    loop = tornado.ioloop.IOLoop.instance()
-    #    loop.add_callback(application.test)
-    loop.start()
-
-main()

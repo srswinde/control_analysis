@@ -1,4 +1,5 @@
 """Main module."""
+import json
 from struct import pack, unpack
 from collections import namedtuple
 import pandas as pd
@@ -8,12 +9,22 @@ from scipy import fftpack, stats, signal, special
 from scipy.optimize import curve_fit, least_squares
 import matplotlib.pyplot as plt
 import numpy as np
-from abc import abstractmethod
+
 import math
 import datetime
 from copy import deepcopy
 from serial import Serial
 from pathlib import Path
+import requests
+from bs4 import BeautifulSoup
+import logging
+import re
+from .appconfig import AppConfig
+from uuid import uuid4
+from .appconfig import AppConfig; config = AppConfig()
+import asyncio
+from functools import partial
+
 _wfmpre = namedtuple("wfmpre", ['byt_nr',
                                 'bit_nr',
                                 'encdg',
@@ -31,7 +42,13 @@ _wfmpre = namedtuple("wfmpre", ['byt_nr',
                                 'yoff',
                                 'yunit',
                                 ])
-_pre = _wfmpre(
+
+
+
+
+
+
+_pre_description = _wfmpre(
     byt_nr='Preamble byte width of waveform points',
     bit_nr='Preamble bit width of waveform points',
     encdg='the preamble encoding method',
@@ -51,6 +68,25 @@ _pre = _wfmpre(
 )
 
 
+_data = namedtuple("data", ["encdg", "destination", "source", "start", "stop", "width"])
+
+_vertical = namedtuple("vertical", [
+                         'scale',
+                         'position',
+                         'offset',
+                         'coupling',
+                         'bandwidth',
+                         'deskew',
+                         'impedance',
+                         'probe',
+                         'yunit',
+                         'id',
+                         'invert',
+                         ])
+
+
+
+
 class filepart(Enum):
     other = auto()
     preamble = auto()
@@ -58,109 +94,255 @@ class filepart(Enum):
     cursor = auto()
 
 
-class commer(Serial):
 
-    def __init__(self, port=None, timeout=1.0, *args, **kwargs):
+class http:
 
-        if port is None:
-            port = "com5"
+    """This class encapsulates functions to communicqte with
+    the Tektronix oscilloscope over its HTTP/Web interface. It
+    is meant to be used as a drop in replacement for the rs232
+    class. Unfortunately the HTTP interface was never meant
+    to be used as a programming API. You will notice a lot of
+    work to make sure we get all the data back from the server.
+    """
 
-        super().__init__(port, timeout=timeout, *args, **kwargs)
+    def __init__(self, ipaddr: str, port: int=80, chunksize: int=512):
+        self.ipaddr = ipaddr
+        self.port = port
+        self.chunksize = chunksize
+        self.url = f"http://{self.ipaddr}:{self.port}/Comm.html"
+        self.imageurl = f"http://{self.ipaddr}:{self.port}/Image.png"
 
-    def converse(self, cmd: str):
-        self.flushOutput()
-        ecmd = (cmd + '\n').encode()
-        self.write(ecmd)
-        self.flushInput()
-        return self.recv()
 
-    def send(self, msg):
-        output = msg + '\n'
-        return self.write(output.encode())
+        self.cache = {}
 
-    def recv(self, sep=b'\r\n\n\r', length=None):
-        if length is not None:
-            return self.read(length)
+        # Here we setup a begin and end tag
+        # for communication. Because the messages that
+        # come back seem to be split arbitrarily we
+        # need to know where the message begins and
+        # ends. We will query VAR1 before and VAR2
+        # after every msg we send. that way we know
+        # we will get a response. :/
 
-        chunk = b' '
-        resp = b''
+        try:
+            self.start()
+        except RuntimeError as error:
+            logging.warning(f"Initial setup failed. API needs to be flushed. This will take a 10 seconds or so.")
+            self.hard_flush()
+            self.start()
 
-        while chunk not in sep and chunk != b'':
-            chunk = self.read(1)
-            resp += chunk
 
-        return resp.decode()
+    def start(self):
+        rqdata = {
+            "COMMAND": ["header off", "math:var1 1.2345"],
+            "gpibsend": "Send",
+            "name": None
+        }
 
-    def wfmpre(self):
-        resp = self.converse("wfmpre?")
-        return _wfmpre(*resp.strip().split(';'))
-        # return self._wfmpre(*resp.split(';'))
+        requests.get(f"http://{self.ipaddr}:{self.port}/Comm.html", rqdata)
+        rqdata['COMMAND'] = "math:var2 5.4321"
+        requests.get(f"http://{self.ipaddr}:{self.port}/Comm.html", rqdata)
 
-    def get_curve(self, channel):
-        possibles = ["ch1", "ch2", "ch3", "ch4"]
-        # possibles += [1,2,3,4]
-        if channel not in possibles:
-            raise TypeError(f"{channel}")
-        self.send(f"data:source {channel}")
+        rqdata['COMMAND'] = "math:var1?"
+        self.startstr = requests.get(f"http://{self.ipaddr}:{self.port}/Comm.html", rqdata).text.split('\n')[0]
+        rqdata['COMMAND'] = "math:var2?"
+        self.endstr = requests.get(f"http://{self.ipaddr}:{self.port}/Comm.html", rqdata).text.split('\n')[0]
 
-        cursor_str = self.converse("cursor?")
-        data_str = self.converse("data?")
-        pre = self.wfmpre()
+        try:
+            float(self.startstr)
+        except ValueError:
 
-        c.flushInput()
-        self.send("curve?")
+            raise RuntimeError(f"startstr should be convertible to float but it is {self.startstr}")
 
-        resp = b''
-        while len(resp) < 10000:
-            chunk = self.read(10)
-            resp += chunk
-            if chunk == b'':
+        try:
+            float(self.endstr)
+        except ValueError:
+            raise RuntimeError(f"startstr should be convertible to float but it is {self.endstr}")
+
+        if float(self.startstr) != 1.2345:
+            raise RuntimeError(f"startstr should be 1.2345 but its {self.startstr}")
+
+        if float(self.endstr) != 5.4321:
+            raise RuntimeError(f"startstr should be 1.2345 but its {self.endstr}")
+
+
+
+    def hard_flush(self):
+        """FLush info from the api with the lone `?'"""
+        # I have found that sending the `?' alone
+        # flushes that http api without adding anything
+        # this might work in situations were flush
+        # isn't enough. This takes a long time ~ 10 seconds.
+
+        rqdata = {
+            "COMMAND": "?",
+            "gpibsend": "Send",
+            "name": None
+        }
+
+        requests.get(self.url, rqdata)
+
+    def converse(self, msg: str):
+        """Send a message return a response
+        The response is received in the html textarea.
+        We use BeautifulSoup to extract it.
+
+        If the the response is more than 80 characters
+        or so it is broken up into more than one packet
+        To make sure we get the whole message we request
+        var1 before and var2 after the request in msg.
+        In the response, we throw away everything before
+        VAR1 and keep flushing until we see var2.
+        """
+        self.flush()
+        rqdata = {
+            "COMMAND": ["math:var1?", msg, "math:var2?"],
+            # "COMMAND": [""],
+            "gpibsend": "Send",
+            "name": None
+        }
+        resp = requests.post(self.url, rqdata)
+        sp = BeautifulSoup(resp.text, features="html.parser")
+        dt = sp.find("textarea").contents[0]
+        stag = dt.find(self.startstr)
+        etag = dt.find(self.endstr)
+        etag_count = 1
+        if stag == -1: raise ValueError( f"Cannot find starttag in {dt}" )
+
+        clipped = dt[stag + len(self.startstr) + 1:]
+        if etag == -1:
+            clipped += self.flush()
+
+        elif etag < stag:
+            raise ValueError( f"{etag} is greater than {stag}!: ==> {dt}" )
+
+        return clipped[:clipped.find(self.endstr)].strip()
+
+    def flush(self):
+        """Send requests for Var2 until
+        we see VAR2 in the response. If this takes
+        more than max_count iterations
+        we throw an error.  We return all the
+        data before the VAR2.
+        """
+
+        buffer = ""
+        dt = ""
+        count = 0
+        max_count = 10
+        while dt != self.startstr:
+
+            rqdata = {
+                "COMMAND": "math:var2?",
+                "gpibsend": "Send",
+                "name": None
+            }
+            resp = requests.post(self.url, rqdata)
+            sp = BeautifulSoup(resp.text, features="html.parser")
+            dt = sp.find("textarea").contents[0]
+            buffer += dt
+            if dt == self.endstr:
                 break
 
-        if len(resp) != 10000:
-            raise ValueError("Did not recieve all the curve data! Is correct channel selected on the scope?")
+            if count >= max_count:
+                raise StopIteration(f"Max iter is acheived without self.endstr! {buffer}")
 
-        return waveform(pre, resp, cursor_str, data_str)
+            count += 1
 
-    def upload_curve(self, ref, wfm):
-        """Specify the reference waveform using DATa:DESTination.
-        2. Specify the record length of the reference waveform using WFMPre:NR_Pt.
-        3. Specify the waveform data format using DATa:ENCdg.
-        4. Specify the number of bytes per data point using DATa:WIDth.
-        5. Specify first data point in the waveform record using DATa:STARt.
-        6. Transfer waveform preamble information using WFMPRe.
-        7. Transfer waveform data to the oscilloscope using CURVe."""
+        return buffer
 
-        spots = ('ref1', 'ref2', 'ref3', 'ref4')
-        if ref.lower() not in spots:
-            raise NameError(f"ref must be one of {spots} not {ref}")
+    def wfmpre(self):
 
-        rawdata = wfm.raw()
-        self.send(f"data:destination {ref}")
-        self.send(f"wfmpre:nr_pt 10000")
-        self.send(f'data:encdg BIN')
-        self.send(f'data:width 1')
-        self.send(f'data:start 1')
+        resp = self.converse("wfmpre?")
+        preamble = _wfmpre(*resp.strip().split(';'))
 
-        self.write(b"curve " + rawdata)
+        # The http interface seems to ignore
+        # some aspects of the preamble. The
+        # byt_nr ===2 and bn_fmt === 'RI'
+        # regardless of what is stored in the preamble.
+        preamble = preamble._replace(byt_nr=2, bn_fmt='RI')
 
-    def __del__(self):
-        self.close()
-        super().__del__()
+        self.cache['preamble'] = preamble._asdict()
+        return preamble
 
+    def data(self):
+        """Retrieve 'data' from scope. This
+        gives us the format and location
+        of waveform data
+        """
+
+        resp = self.converse("data?")
+        data = _data(*resp.split(';'))
+        self.cache['data'] = data
+        return data
+
+    def vertical(self, channel):
+        possibles = ["ch1", "ch2", "ch3", "ch4"]
+
+        if channel not in possibles:
+            raise ValueError(f"channel must be in {possibles} you gave {channel}")
+
+        resp = self.converse(f"{channel}?")
+        vertical = _vertical(*resp.split(';'))
+        self.cache[channel] = vertical
+
+        return vertical
+
+    def get_curve(self, channel):
+
+        possibles = ["ch1", "ch2", "ch3", "ch4"]
+        regex = re.compile(r"#([0-9])")
+
+        if channel not in possibles:
+            raise ValueError(f"{channel}")
+
+        rqdata = {
+            "command": [f"select:{channel} on", "save:waveform:fileformat internal"],
+            "wfmsend": "Get"
+        }
+
+        self.converse(f"data:source {channel}")
+        vertical = self.vertical(channel)
+        data_info = self.data()
+        pre = self.wfmpre()
+
+        resp = requests.get(f"http://{self.ipaddr}:{self.port}/getwfm.isf", rqdata, stream=True)
+
+        last_char = b""
+        for char in resp.iter_content(1):
+            substr = (last_char+char).decode()
+            match = regex.match( substr)
+            if match:
+                next_read = int(match.group(1))
+                break
+
+            last_char = char
+
+        length = int(resp.raw.read(next_read))
+        logging.debug(f"We have {length} bytes to read")
+        data = resp.raw.read(length)
+
+        return waveform(pre, data, vertical, data_info, self.get_raw_image())
+
+    def get_raw_image(self):
+        resp = requests.get(f"http://{self.ipaddr}/Image.png")
+        return resp.content
 
 class waveform:
 
-    def __init__(self, preamble, data, cursor=None, data_str=None):
+    divs = 10
+    """This class stores and analyzes waveforms
+    from the oscilloscope."""
+    def __init__(self, preamble, data, vertical=None, data_info=None, img=None):
 
+        self.config = AppConfig
         if preamble.encdg == "BIN":
             if preamble.bn_fmt == "RI":  # signed
-                if preamble.byt_nr == '2':  # short
+                if preamble.byt_nr in ('2', 2):  # short
                     ctype = 'h'  # signed short
                 else:  # char
                     ctype = 'b'  # signed char
             else:  # unsigned
-                if preamble.byt_nr == '2':  # short
+                if preamble.byt_nr in ('2',2):  # short
                     ctype = 'H'  # unsigned short
                 else:  # char
                     ctype = 'c'  # unsigned char
@@ -171,18 +353,38 @@ class waveform:
             else:
                 byte_order = '>'
 
-            pack_str = f'{byte_order}{len(data)}{ctype}'
-            self._data = unpack(pack_str, data)
+            pack_str = f'{byte_order}{int(preamble.nr_pt)}{ctype}'
+            try:
+                self._data = unpack(pack_str, data)
+            except Exception as error:
+                print(error)
+                print(pack_str)
+                self.cursor = cursor
+                self.data_info = data_info
+                self.preamble = preamble
+                self.unpack_str = pack_str
+                self.raw = data
+                self.img = img
+                return
         else:
             raise Exception(f"bad Preamble! {preamble}")
+
         self.series = pd.Series(self._data)
         self.series.index *= float(preamble.xincr)
-        self.series.index = pd.to_timedelta(self.series.index, unit="sec")
-        self.series = self.series * float(preamble.ymult) + float(preamble.yoff)
+        #self.series.index = pd.to_timedelta(self.series.index, unit="sec")
+        self.series.index.name='microseconds'
+        self.series.name='Volts'
+        #self.series = self.series * float(preamble.ymult) + float(preamble.yoff)
 
-        self.cursor = cursor
-        self.data_str = data_str
+        self.series *= self.divs/(2**(8*preamble.byt_nr))
+
+
+        self.data_info = data_info
         self.preamble = preamble
+        self.vertical = vertical
+        self.unpack_str = pack_str
+        self.img = img
+        self.raw = data
 
     @property
     def x(self):
@@ -203,6 +405,7 @@ class waveform:
             raise ValueError(f"Can't convert to 1d numpy array y.shape = {y.shape}")
 
         return y
+
     def clean_step(self, sigma=3.0, window=None):
         """Replace datapoints with std>sigma over a window
         with the mean in that window. This operation is not
@@ -238,7 +441,7 @@ class waveform:
             self.series.index = self.series.index.total_seconds()
             self.index_type = Type
         else:
-            raise ValueError(f"Type argumnet must be in {Types}")
+            raise ValueError(f"Type argument must be in {Types}")
 
     def zero_mean(self, inplace=True):
         if inplace:
@@ -259,22 +462,42 @@ class waveform:
     def raw(self):
         return pack(f'{len(self._data)}b', *self._data)
 
-    def save(self, fname):
-        data = StringIO()
-        data.write("####### Preamble ##########################\r\n")
 
-        for key, value in self.preamble._asdict().items():
-            data.write(f"#\t{key}={value}\r\n")
-        data.write("#######  Cursor ##########################\r\n")
-        data.write(f"#{self.cursor}\r\n")
-        data.write("#######  Data ##########################\r\n")
-        data.write(f"#{self.data_str}\r\n")
-        data.write("# Delete the above lines to open in excel ######\r\n\r\n")
-        pd.DataFrame({"volts [V]": self.series}).to_csv(data, mode='a', index_label='Time [s]')
+    def meta(self):
+        return {
+            "preamble":self.preamble._asdict(),
+            "data": self.data_info._asdict(),
+            "vertical": self.vertical._asdict()
+        }
 
-        data.seek(0)
-        with open(fname, 'w') as fd:
-            fd.write(data.read())
+    def save(self, name=None, path=Path("waveforms/"), unique=None):
+
+
+        # get 4 bytes for a unique ID
+        if unique is None:
+            unique = str(uuid4())[:4]
+
+        if name is None:
+            name = datetime.datetime.now().isoformat()
+
+        full_path = path/f"{unique}_{name}"
+
+        full_path.mkdir(parents=True)
+
+        with open(full_path/"meta.json", 'w') as meta_file:
+            json.dump(self.meta(), meta_file)
+
+        with open(full_path/"data.csv", 'w') as data_file:
+            self.dataframe().to_csv(data_file)
+
+        with open(full_path/"raw.bin", 'wb') as bin_file:
+            bin_file.write(self.raw)
+
+        if self.img:
+            with open(full_path/"image.png", 'wb') as image_file:
+                image_file.write(self.img)
+
+        return f"{unique}_{name}"
 
     def frequency(self, sigma=0):
         arr = self.x
@@ -318,16 +541,11 @@ class waveform:
 
         output = pd.Series((self.series - y0) / amp)
 
-
-
         output.index -= t0
         if inplace:
             self.series = output[0:]
         else:
             return output[0:], (x0, y0, rise, amp), nfit[idx:]
-
-
-
 
     def analyze(self, peak_width=0.01):
         x, y = self.x, self.y
@@ -349,7 +567,6 @@ class waveform:
 
         return an(peaks, peak_time, final_value, rise_time, rise_time_rate, overshoot, t_10, t_90)
 
-
     def plot_analysis(self, ax=None, an=None):
         x, y = self.x, self.y
         if ax is None:
@@ -369,7 +586,26 @@ class waveform:
         return ax
 
 
+class loadedwf(waveform):
 
+    def __init__(self, data, meta):
+
+        self.preamble = _wfmpre(**meta['preamble'])
+        self.data_info = _data(**meta['data'])
+        self.vertical = _vertical(**meta['vertical'])
+
+        self.series = data
+
+class curve_job:
+
+    def __init__(self, name, channel, unique=None):
+
+        if unique is None:
+            unique = str(uuid4())[:4]
+
+        self.unique = unique
+        self.name = name
+        self.channel = channel
 
 
 def fake(tf: signal.TransferFunction=None, noise: float= 0.00, resolution: float= 0.005, t=None):
@@ -400,17 +636,19 @@ def fake(tf: signal.TransferFunction=None, noise: float= 0.00, resolution: float
     return loadedwf(s)
 
 
-
 def order2(zeta, w_n, k=1):
     return signal.TransferFunction([k], [1, zeta*w_n, w_n**2])
 
 def load(fname):
+
     class loadedwf(waveform):
+
         def __init__(self, data, fname):
             self.series = data
             self.series.index = pd.to_timedelta(self.series.index, unit="seconds")
             self.fname = fname
-    path = Path(__file__).parent/"waveforms"/fname
+
+    path = Path(config["DEFAULT"]['waveform_path'])
 
     with path.open() as fd:
 
@@ -418,26 +656,7 @@ def load(fname):
         data = StringIO()
         part = filepart.other
         predict = {}
-        for rawline in fd:
-            line = rawline.strip()
 
-            if line == '':
-                pass
-            elif line.startswith("#"):
-
-                meta.append(line)
-            else:
-                data.write(f"{line}\r\n")
-
-            if "####### Preamble " in line:
-                part = filepart.preamble
-
-            elif '#######  Cursor ' in line:
-                part = filepart.cursor
-
-            elif '#######  Data ' in line:
-                part = filepart.data
-    data.seek(0)
     series = pd.read_csv(data, index_col="Time [s]")
 
     return loadedwf(series, fname), meta
@@ -453,6 +672,128 @@ def load_all():
             print(f"Error loading {fname}: {err}")
 
     return wfs
+
+
+class MultipleConnectionError(RuntimeError):
+    pass
+
+
+
+class comm_singleton:
+    instance = None
+
+    class http_wrapper:
+        http = None
+
+        def __init__(self):
+            self.connected = False
+            self.session_id = None
+            self.session_time = None
+            self.time_limit = datetime.timedelta(hours=2)
+            self.details = None
+            self.current_job = None
+            self.last_job = None
+            self.error = None
+
+        def start(self, ipaddr, connection_details, port=80):
+            self.session_time = datetime.datetime.now()
+            if self.session_id is not None:
+                raise MultipleConnectionError("Only one connection allowed")
+
+            self.http = http(ipaddr, port)
+            self.session_id = uuid4()
+            self.connected = True
+            self.details = connection_details
+
+        def converse(self, msg: str):
+            self.session_time = datetime.datetime.now()
+            if self.connected:
+                return self.http.converse(msg)
+            else:
+                raise RuntimeError(f"Must connect before sending msg")
+
+        def current_job_finished(self):
+
+            if self.error:
+                raise self.error
+
+            if self.current_job:
+                return False
+            else:
+                jobid = self.last_job
+                self.last_job = None
+                return jobid
+
+        def clear_error(self):
+
+            self.error = None
+            self.last_job = None
+            self.current_job = None
+
+
+        async def get_and_save(self, name, channel, unique=None):
+            """Retrieve the waveform from the scope and
+            save it to disk. This should be done with
+            concurrency. """
+
+            loop = asyncio.get_running_loop()
+            self.error = None
+            # get 4 bytes for a unique ID
+            if unique is None:
+                unique = str(uuid4())[:4]
+
+            try:
+                self.current_job = unique
+                # create partial fxns and run them in the background
+                fget_curve = partial(self.http.get_curve, channel)
+                curve = await loop.run_in_executor(None, fget_curve)
+                fsave = partial(curve.save,
+                                name,
+                                path=Path(config["DEFAULT"]['waveform_path']),
+                                unique=unique)
+
+                dirname = await loop.run_in_executor(None, fsave)
+
+                self.last_job = dirname
+                self.current_job = None
+
+            except Exception as error:
+                logging.warning(f"There was an error in getting the curve f{error}")
+                self.error = error
+
+
+            return dirname
+
+        def stop(self):
+            self.connected = False
+            self.session_time = None
+            self.session_id = None
+            self.details = None
+
+        def state(self):
+            self.session_time = datetime.datetime.now()
+            return {
+                "connected": self.connected,
+                "pyobj": str(self.http),
+                "session": str(self.session_id),
+                "details": self.details
+            }
+
+        def has_expired(self):
+            if self.session_time is None:
+                raise RunTimeError(f"{self.__class__} cannot expire if it has not been started")
+
+            return (datetime.datetime.now()-self.session_time) > self.time_limit
+
+        @property
+        def imageurl(self):
+            return self.http.imageurl
+
+    def __new__(cls):
+        if cls.instance is None:
+            cls.instance = cls.http_wrapper()
+        return cls.instance
+
 
 
 

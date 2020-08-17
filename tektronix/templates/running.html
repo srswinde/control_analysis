@@ -1,0 +1,116 @@
+
+<!doctype html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+	<meta name="description" content="" />
+	<meta name="author" content="" />
+
+	<title> Tektronix </title>
+	<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+
+	<!-- Font Awesome icons (free version)-->
+	<script src="https://use.fontawesome.com/releases/v5.13.0/js/all.js" crossorigin="anonymous"></script>
+
+	<!-- Google fonts-->
+	<link href="https://fonts.googleapis.com/css?family=Varela+Round" rel="stylesheet" />
+	<link href="https://fonts.googleapis.com/css?family=Nunito:200,200i,300,300i,400,400i,600,600i,700,700i,800,800i,900,900i" rel="stylesheet" />
+
+	<link href="https://code.jquery.com/ui/1.12.1/themes/smoothness/jquery-ui.css" rel="stylesheet"/>
+
+	<!-- Core theme CSS (includes Bootstrap)-->
+	<link href="/s/css/styles.css" rel="stylesheet" />
+
+	<style>
+		.int
+		{
+			//padding:10px;
+			font-size:4px;
+		}
+		input.radio
+		{
+		    position:
+		}
+
+	</style>
+    <script>
+        function get_waveform()
+        {
+            name = $("input#wfm_title").value()
+            $.ajax({
+                url:"/tek/save",
+                data:{name:name, channel:"ch1"}
+            })
+        }
+    </script>
+
+</head>
+<body style="background:black;color:white">
+{% include navbar.html%}
+
+<header class="masthead">
+		<div class="container d-flex h-75 align-items-center">
+				<div class="mx-auto text-center">
+                    <img id="tek_screen" src="{{ tekcomm.imageurl }}"/>
+
+                    <form>
+                        <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#beforesubmit">
+                            Save Waveform
+                        </button>
+                    </form>
+
+
+                </div>
+        </div>
+</header>
+
+<div id="beforesubmit" class="modal fade" tabindex="-1" role="dialog" style="font-color:black;color:black">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 id="presubmit_modal_title" class="modal-title">Please Name this Waveform</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <form action="/tek/save" method="get">
+            <div class="modal-body">
+                <p id="presubmit_modal_msg"></p>
+
+                <input name="name" id="wfm_title" type="text" value="untitled">
+                <div>
+                    <input class="radio" type="radio" id="ch1" name="channel" value="ch1" checked="checked">
+                    <label for="ch1">Channel 1</label><br>
+                </div>
+                <div>
+                    <input class="radio" type="radio" id="ch2" name="channel" value="ch2">
+                    <label for="ch2">Channel 2</label>
+                </div>
+                <div>
+                    <input class="radio" type="radio" id="ch3" name="channel" value="ch3">
+                    <label for="ch3">Channel 3</label>
+                </div>
+                <div>
+                    <input class="radio" type="radio" id="ch4" name="channel" value="ch4">
+                    <label for="ch4">Channel 4</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <input type="submit" id="btn-submit" class="btn btn-secondary" value="Save">
+                <!--<button onclick="get_waveform()" id="btn-submit" type="button" class="btn btn-secondary" data-dismiss="modal">Get Waveform</button>-->
+                <button id="btn-cancel" type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+            </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+		<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js" integrity="sha256-VazP97ZCwtekAsvgPBSUwPFKdrwD3unUfSGVYrahUqU=" crossorigin="anonymous"></script>
+		<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.bundle.min.js"></script>
+
+		<!-- Third party plugin JS-->
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-easing/1.4.1/jquery.easing.min.js"></script>
+</body>
+</html>
