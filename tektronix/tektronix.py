@@ -84,6 +84,21 @@ _vertical = namedtuple("vertical", [
                          'invert',
                          ])
 
+_measurement = namedtuple("meas", [
+    'type',
+    'units',
+    'count',
+    'min',
+    'max',
+    'mean',
+    'stddev',
+    'source1',
+    'source2',
+    'delay_direction',
+    'edge1',
+    'edge2',
+    'state',
+])
 
 
 
@@ -286,6 +301,19 @@ class http:
         self.cache[channel] = vertical
 
         return vertical
+
+    def measurement(self, num):
+        possibles = [1, 2, 3, 4]
+        if num not in possibles:
+            raise ValueError(f"Measurement number (num) must be in {possibles} not {num} .")
+
+        resp = self.converse(f"measurement:meas{num}?")
+        try:
+            return _measurement(*resp.split(';'))
+        except Exception as error:
+            logging.warning(f"Error collecting measurement: {error}")
+            return resp
+
 
     def get_curve(self, channel):
 
